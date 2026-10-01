@@ -1,0 +1,179 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Autoloader (Zero-dependency fallback)
+spl_autoload_register(function ($class) {
+    $prefix = 'EidCloud\\PhpModernizer\\';
+    $baseDir = __DIR__ . '/../src/';
+
+    $len = strlen($prefix);
+    if (strncmp($prefix, $class, $len) !== 0) {
+        return;
+    }
+
+    $relativeClass = substr($class, $len);
+    $file = $baseDir . str_replace('\\', '/', $relativeClass) . '.php';
+
+    if (file_exists($file)) {
+        require_once $file;
+    }
+});
+
+use EidCloud\PhpModernizer\Modernizer;
+use EidCloud\PhpModernizer\Diff\UnifiedDiffGenerator;
+
+$modernizer = new Modernizer();
+$diffGen = new UnifiedDiffGenerator();
+
+function printBanner(): void
+{
+    echo "\033[1;36m";
+    echo "==============================================================\n";
+    echo "  🐘 EidCloud PHP Modernizer v" . Modernizer::VERSION . "\n";
+    echo "  Automated Legacy Code Migrator (PHP 5.x/7.x -> PHP 8.4+)\n";
+    echo "  Eng. MHD. Shadi AL-Hasan\n";
+    echo "==============================================================\033[0m\n\n";
+}
+
+function printHelp(): void
+{
+    printBanner();
+    echo "Usage:\n";
+    echo "  php bin/eidcloud-modernize <command> [target_path] [options]\n\n";
+    echo "Commands:\n";
+    echo "  scan <path>               Inspect legacy PHP files and report obsolete patterns\n";
+    echo "  upgrade <path> [options]  Modernize legacy code (requires --dry-run or --apply)\n\n";
+    echo "Options:\n";
+    echo "  --dry-run                 Simulate modernizing and display colored diffs without writing files\n";
+    echo "  --apply                   Apply modernizations directly to the source files\n";
+    echo "  --backup                  Create a .bak backup file before overwriting (used with --apply)\n";
+    echo "  --no-syntax-check         Skip automatic 'php -l' syntax check validation\n";
+    echo "  -h, --help                Display this helpful documentation\n";
+    echo "  -v, --version             Display version information\n\n";
+    echo "Examples:\n";
+    echo "  php bin/eidcloud-modernize scan ./legacy_project/\n";
+    echo "  php bin/eidcloud-modernize upgrade ./legacy_project/ --dry-run\n";
+    echo "  php bin/eidcloud-modernize upgrade ./legacy_project/ --apply --backup\n";
+    echo "  php bin/eidcloud-modernize upgrade ./legacy_file.php --apply\n\n";
+}
+
+$argv = $_SERVER['argv'];
+$argc = count($argv);
+
+if ($argc < 2 || in_array('-h', $argv) || in_array('--help', $argv)) {
+    printHelp();
+    exit(0);
+}
+
+if (in_array('-v', $argv) || in_array('--version', $argv)) {
+    echo "EidCloud PHP Modernizer version " . Modernizer::VERSION . "\n";
+    exit(0);
+}
+
+$command = $argv[1];
+
+if (!in_array($command, ['scan', 'upgrade'])) {
+    echo "\033[31mError: Unknown command '{$command}'. Run with --help for usage.\033[0m\n";
+    exit(1);
+}
+
+$target = $argv[2] ?? null;
+if (!$target || str_starts_with($target, '-')) {
+    echo "\033[31mError: Missing target directory or file path.\033[0m\n";
+    exit(1);
+}
+
+if (!file_exists($target)) {
+    echo "\033[31mError: Target path '{$target}' does not exist.\033[0m\n";
+    exit(1);
+}
+
+$options = array_slice($argv, 3);
+$isDryRun = in_array('--dry-run', $options);
+$isApply = in_array('--apply', $options);
+$isBackup = in_array('--backup', $options);
+$skipSyntax = in_array('--no-syntax-check', $options);
+
+if ($command === 'upgrade' && !$isDryRun && !$isApply) {
+    echo "\033[33mWarning: Upgrade command requires either --dry-run or --apply.\033[0m\n";
+    echo "Defaulting to --dry-run for safety.\n\n";
+    $isDryRun = true;
+}
+
+printBanner();
+
+$files = $modernizer->scanDirectory($target);
+$fileCount = count($files);
+
+echo "Found \033[1;32m{$fileCount}\033[0m PHP file(s) in: \033[1;34m{$target}\033[0m\n";
+echo "Active Transformers:\n";
+foreach ($modernizer->getTransformers() as $t) {
+    echo "  - \033[36m{$t->getName()}\033[0m: {$t->getDescription()}\n";
+}
+echo "\n" . str_repeat('-', 60) . "\n\n";
+
+$changedFilesCount = 0;
+$syntaxErrorsCount = 0;
+
+foreach ($files as $index => $filePath) {
+    $relPath = str_replace(realpath($target) ?: $target, '', realpath($filePath) ?: $filePath);
+    if (empty($relPath)) {
+        $relPath = basename($filePath);
+    } else {
+        $relPath = ltrim($relPath, '/\\');
+    }
+
+    $result = $modernizer->modernizeFile($filePath);
+
+    if ($result['hasChanged']) {
+        $changedFilesCount++;
+        echo "\033[1;33m[MODERNIZABLE]\033[0m {$relPath}\n";
+
+        if (!$result['isValidSyntax'] && !$skipSyntax) {
+            $syntaxErrorsCount++;
+            echo "  \033[31m[Syntax Validation Warning]\033[0m " . trim($result['syntaxError'] ?? 'Unknown error') . "\n";
+        } else {
+            echo "  \033[32m[Syntax Validated]\033[0m Code compiles cleanly with PHP " . PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION . "\n";
+        }
+
+        if ($command === 'upgrade') {
+            if ($isDryRun) {
+                echo "\n--- Diff Preview: ---\n";
+                echo $diffGen->renderColored($result['diff']);
+                echo "\n";
+            } elseif ($isApply) {
+                if ($isBackup) {
+                    $backupPath = $filePath . '.bak';
+                    file_put_contents($backupPath, $result['original']);
+                    echo "  \033[34m[Backup Saved]\033[0m {$backupPath}\n";
+                }
+                file_put_contents($filePath, $result['modernized']);
+                echo "  \033[32m[Applied]\033[0m Successfully upgraded and saved.\n\n";
+            }
+        }
+    } else {
+        if ($command === 'scan') {
+            echo "\033[32m[CLEAN]\033[0m {$relPath}\n";
+        }
+    }
+}
+
+echo "\n" . str_repeat('=', 60) . "\n";
+echo "Summary:\n";
+echo "  Total scanned:   {$fileCount}\n";
+echo "  Needs modernizing: {$changedFilesCount}\n";
+if ($syntaxErrorsCount > 0) {
+    echo "  Syntax warnings: {$syntaxErrorsCount}\n";
+}
+if ($command === 'upgrade') {
+    if ($isDryRun) {
+        echo "\n\033[1;33mDRY-RUN completed.\033[0m To write changes, re-run with: --apply [--backup]\n";
+    } elseif ($isApply) {
+        echo "\n\033[1;32mUPGRADE COMPLETED.\033[0m All modernizations applied.\n";
+    }
+}
+echo str_repeat('=', 60) . "\n";
+
+exit($syntaxErrorsCount > 0 ? 2 : 0);

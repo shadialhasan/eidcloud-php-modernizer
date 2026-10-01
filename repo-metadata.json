@@ -1,0 +1,12 @@
+{
+  "description": "Automated legacy PHP code modernizer upgrading PHP 5/7 procedural patterns and mysql_* to PDO and PHP 8.4+",
+  "topics": [
+    "eidcloud",
+    "php-modernizer",
+    "code-migration",
+    "ast-refactoring",
+    "legacy-code",
+    "php84-upgrade",
+    "php8"
+  ]
+}
